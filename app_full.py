@@ -1,8 +1,4 @@
 import discord
-# Wyłącz audio, aby uniknąć błędu audioop w Python 3.13
-discord.opus = None
-discord.audioop = None
-
 from discord import app_commands
 from discord.ext import commands
 import mysql.connector
