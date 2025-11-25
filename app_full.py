@@ -4,8 +4,6 @@ import mysql.connector
 from mysql.connector import Error
 
 # ---------------- CONFIG ----------------
-DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.GrtGWQ.LmH_8G7JnvWyjcIuqJ_sgTZSvwOUw8WfG-I5Ak"
-
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
 MYSQL_USER = "avnadmin"
