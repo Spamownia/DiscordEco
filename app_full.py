@@ -5,7 +5,7 @@ import mysql.connector
 from mysql.connector import Error
 
 # ---------------- CONFIG ----------------
-DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.G0odi1.ufqfxu0dCTIlgDWkd0RCVootJzDj59j6uAnGtA"
+DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.GxaESi.VCYsRIAatgCaTX3gWvC-UQ9Arfch2oCegGtMUs"
 
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
@@ -33,7 +33,6 @@ def get_connection():
         print(f"Błąd połączenia MySQL: {e}")
         return None
 
-# ---------------- INITIAL TABLES ----------------
 def init_db():
     conn = get_connection()
     if conn:
@@ -123,7 +122,6 @@ class Economy(commands.Cog):
                 ON DUPLICATE KEY UPDATE balance=%s
             """, (user_id, new_balance, new_balance))
 
-            # logowanie transakcji
             cursor.execute("""
                 INSERT INTO transactions(user_id, action, item, amount)
                 VALUES(%s, %s, %s, %s)
@@ -149,7 +147,6 @@ class Economy(commands.Cog):
                 ON DUPLICATE KEY UPDATE balance=%s
             """, (user.id, amount, amount))
 
-            # logowanie transakcji
             cursor.execute("""
                 INSERT INTO transactions(user_id, action, item, amount)
                 VALUES(%s, %s, %s, %s)
