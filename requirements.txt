@@ -1,2 +1,2 @@
-py-cord
+py-cord==2.6.1
 mysql-connector-python==9.5.0
