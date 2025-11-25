@@ -1,146 +1,202 @@
-#!/usr/bin/env python3
-import os
+import discord
+from discord import app_commands
+from discord.ext import commands
 import mysql.connector
-from flask import Flask, request, jsonify
+from mysql.connector import Error
 
 # ---------------- CONFIG ----------------
+DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.GxaESi.VCYsRIAatgCaTX3gWvC-UQ9Arfch2oCegGtMUs"
+
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
 MYSQL_USER = "avnadmin"
-MYSQL_PASS = "AVNS_6gzpU-skelov685O3Gx"
-MYSQL_DB   = "defaultdb"
+MYSQL_PASSWORD = "AVNS_6gzpU-skelov685O3Gx"
+MYSQL_DB = "defaultdb"
 
-# Lista adminów po steam_id
-ADMINS = ["76561197992396189"]  # np. AdminPlayer
-# ----------------------------------------
+# ---------------- BOT SETUP ----------------
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-app = Flask(__name__)
+# ---------------- DATABASE ----------------
+def get_connection():
+    try:
+        conn = mysql.connector.connect(
+            host=MYSQL_HOST,
+            port=MYSQL_PORT,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            database=MYSQL_DB
+        )
+        return conn
+    except Error as e:
+        print(f"Błąd połączenia MySQL: {e}")
+        return None
 
-# ------------------- MySQL -------------------
-def get_db_connection():
-    return mysql.connector.connect(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASS,
-        database=MYSQL_DB
-    )
-
-# ------------------- Funkcje bota -------------------
-def get_player_by_steam(steam_id):
-    conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM players WHERE steam_id=%s", (steam_id,))
-    player = cur.fetchone()
-    cur.close()
-    conn.close()
-    return player
-
-def get_shop_items():
-    conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM shop_items")
-    items = cur.fetchall()
-    cur.close()
-    conn.close()
-    return items
-
-def get_player_transactions(player_id):
-    conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT * FROM transactions WHERE player_id=%s ORDER BY created_at DESC", (player_id,))
-    transactions = cur.fetchall()
-    cur.close()
-    conn.close()
-    return transactions
-
-def buy_item(player_id, item_id):
-    conn = get_db_connection()
-    cur = conn.cursor(dictionary=True)
-    # Pobierz item
-    cur.execute("SELECT * FROM shop_items WHERE id=%s", (item_id,))
-    item = cur.fetchone()
-    if not item:
-        cur.close()
+# ---------------- INITIAL TABLES ----------------
+def init_db():
+    conn = get_connection()
+    if conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                discord_id BIGINT PRIMARY KEY,
+                balance INT NOT NULL DEFAULT 0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT,
+                action VARCHAR(50),
+                item VARCHAR(50),
+                amount INT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        cursor.close()
         conn.close()
-        return False, "Item nie istnieje"
-    # Pobierz saldo gracza
-    cur.execute("SELECT balance FROM players WHERE id=%s", (player_id,))
-    balance = cur.fetchone()["balance"]
-    if balance < item["price"]:
-        cur.close()
+
+init_db()
+
+# ---------------- BOT COMMANDS ----------------
+class Economy(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.shop_items = {
+            "Miecz": 100,
+            "Tarcza": 75,
+            "Mikstura": 25,
+            "Zbroja": 200,
+            "Eliksir": 50
+        }
+
+    # --------- PLAYER COMMANDS ---------
+    @app_commands.command(name="balance", description="Pokaż swoje saldo")
+    async def balance(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        conn = get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (user_id,))
+            row = cursor.fetchone()
+            balance = row[0] if row else 0
+            await interaction.response.send_message(f"Twoje saldo: {balance}$")
+            cursor.close()
+            conn.close()
+        else:
+            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+
+    @app_commands.command(name="shop", description="Pokaż dostępne przedmioty w sklepie")
+    async def shop(self, interaction: discord.Interaction):
+        msg = "\n".join([f"{item}: {price}$" for item, price in self.shop_items.items()])
+        await interaction.response.send_message(f"**Sklep:**\n{msg}")
+
+    @app_commands.command(name="buy", description="Kup przedmiot ze sklepu")
+    async def buy(self, interaction: discord.Interaction, item: str):
+        user_id = interaction.user.id
+        conn = get_connection()
+        if not conn:
+            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+            return
+        cursor = conn.cursor()
+        if item not in self.shop_items:
+            await interaction.response.send_message("Nie ma takiego przedmiotu w sklepie.")
+            cursor.close()
+            conn.close()
+            return
+
+        price = self.shop_items[item]
+
+        cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (user_id,))
+        row = cursor.fetchone()
+        balance = row[0] if row else 0
+
+        if balance < price:
+            await interaction.response.send_message("Nie masz wystarczająco środków.")
+        else:
+            new_balance = balance - price
+            cursor.execute("""
+                INSERT INTO users(discord_id, balance)
+                VALUES(%s, %s)
+                ON DUPLICATE KEY UPDATE balance=%s
+            """, (user_id, new_balance, new_balance))
+
+            # logowanie transakcji
+            cursor.execute("""
+                INSERT INTO transactions(user_id, action, item, amount)
+                VALUES(%s, %s, %s, %s)
+            """, (user_id, "BUY", item, price))
+
+            conn.commit()
+            await interaction.response.send_message(f"Kupiłeś **{item}** za {price}$! Nowe saldo: {new_balance}$")
+        cursor.close()
         conn.close()
-        return False, "Niewystarczające saldo"
-    # Aktualizacja salda
-    new_balance = balance - item["price"]
-    cur.execute("UPDATE players SET balance=%s WHERE id=%s", (new_balance, player_id))
-    # Dodanie transakcji
-    cur.execute(
-        "INSERT INTO transactions (player_id, amount, type, source) VALUES (%s, %s, %s, %s)",
-        (player_id, item["price"], "expense", f"buy_{item['name']}")
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return True, f"Kupiłeś: {item['name']} za {item['price']} monet"
 
-# ------------------- Flask routes -------------------
-@app.route("/balance", methods=["GET"])
-def balance():
-    steam_id = request.args.get("steam_id")
-    if not steam_id:
-        return jsonify({"error": "Podaj steam_id"}), 400
-    player = get_player_by_steam(steam_id)
-    if not player:
-        return jsonify({"error": "Nie znaleziono gracza"}), 404
-    return jsonify({
-        "nickname": player["nickname"],
-        "balance": float(player["balance"])
-    })
+    # --------- ADMIN COMMANDS ---------
+    @app_commands.command(name="set_balance", description="Ustaw saldo użytkownika (ADMIN)")
+    async def set_balance(self, interaction: discord.Interaction, user: discord.User, amount: int):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Nie masz uprawnień admina!")
+            return
+        conn = get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO users(discord_id, balance)
+                VALUES(%s, %s)
+                ON DUPLICATE KEY UPDATE balance=%s
+            """, (user.id, amount, amount))
 
-@app.route("/transactions", methods=["GET"])
-def transactions():
-    steam_id = request.args.get("steam_id")
-    if not steam_id:
-        return jsonify({"error": "Podaj steam_id"}), 400
-    player = get_player_by_steam(steam_id)
-    if not player:
-        return jsonify({"error": "Nie znaleziono gracza"}), 404
+            # logowanie transakcji
+            cursor.execute("""
+                INSERT INTO transactions(user_id, action, item, amount)
+                VALUES(%s, %s, %s, %s)
+            """, (user.id, "SET_BALANCE", None, amount))
 
-    # Admin może przeglądać wszystkich
-    if steam_id in ADMINS:
-        conn = get_db_connection()
-        cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT t.*, p.nickname FROM transactions t JOIN players p ON t.player_id=p.id ORDER BY t.created_at DESC")
-        tx = cur.fetchall()
-        cur.close()
-        conn.close()
-    else:
-        tx = get_player_transactions(player["id"])
-    return jsonify(tx)
+            conn.commit()
+            await interaction.response.send_message(f"Ustawiono saldo **{user.name}** na {amount}$")
+            cursor.close()
+            conn.close()
+        else:
+            await interaction.response.send_message("Błąd połączenia z bazą danych.")
 
-@app.route("/shop", methods=["GET"])
-def shop():
-    items = get_shop_items()
-    return jsonify(items)
+    @app_commands.command(name="all_transactions", description="Pokaż ostatnie transakcje (ADMIN)")
+    async def all_transactions(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("Nie masz uprawnień admina!")
+            return
+        conn = get_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT user_id, action, item, amount, timestamp
+                FROM transactions
+                ORDER BY timestamp DESC
+                LIMIT 20
+            """)
+            rows = cursor.fetchall()
+            if rows:
+                msg = "\n".join([f"{r[0]}: {r[1]} {r[2] if r[2] else ''} {r[3]}$ ({r[4]})" for r in rows])
+                await interaction.response.send_message(f"**Ostatnie transakcje:**\n{msg}")
+            else:
+                await interaction.response.send_message("Brak transakcji.")
+            cursor.close()
+            conn.close()
+        else:
+            await interaction.response.send_message("Błąd połączenia z bazą danych.")
 
-@app.route("/buy", methods=["POST"])
-def buy():
-    steam_id = request.json.get("steam_id")
-    item_id = request.json.get("item_id")
-    if not steam_id or not item_id:
-        return jsonify({"error": "Podaj steam_id i item_id"}), 400
-    player = get_player_by_steam(steam_id)
-    if not player:
-        return jsonify({"error": "Nie znaleziono gracza"}), 404
-    ok, msg = buy_item(player["id"], item_id)
-    if ok:
-        return jsonify({"success": True, "message": msg})
-    else:
-        return jsonify({"success": False, "message": msg})
+# ---------------- START BOT ----------------
+bot.add_cog(Economy(bot))
 
-# ------------------- Start Flask -------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    print(f"Uruchamiam bota ekonomii na porcie {port}")
-    app.run(host="0.0.0.0", port=port)
+@bot.event
+async def on_ready():
+    print(f"Bot zalogowany jako {bot.user}")
+    try:
+        await bot.tree.sync()
+        print("Komendy zarejestrowane!")
+    except Exception as e:
+        print(f"Błąd synchronizacji komend: {e}")
+
+bot.run(DISCORD_TOKEN)
