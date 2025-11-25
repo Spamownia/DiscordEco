@@ -2,6 +2,9 @@ import discord
 from discord.ext import commands
 import mysql.connector
 from mysql.connector import Error
+import os
+
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
 # ---------------- CONFIG ----------------
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
