@@ -1,3 +1,2 @@
-flask
-py-cord==2.6.3
+py-cord
 mysql-connector-python==9.5.0
