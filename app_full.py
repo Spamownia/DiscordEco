@@ -2,11 +2,13 @@ import discord
 from discord.ext import commands
 import mysql.connector
 from mysql.connector import Error
+from flask import Flask
+import threading
 import os
 
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-
 # ---------------- CONFIG ----------------
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Pobiera token z Environment Variable
+
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
 MYSQL_USER = "avnadmin"
@@ -72,7 +74,6 @@ class Economy(commands.Cog):
         }
 
     # --------- PLAYER COMMANDS ---------
-
     @discord.slash_command(name="balance", description="Pokaż swoje saldo")
     async def balance(self, ctx: discord.ApplicationContext):
         user_id = ctx.author.id
@@ -137,7 +138,6 @@ class Economy(commands.Cog):
         conn.close()
 
     # --------- ADMIN COMMANDS ---------
-
     @discord.slash_command(name="set_balance", description="Ustaw saldo użytkownika (ADMIN)")
     @commands.has_permissions(administrator=True)
     async def set_balance(self, ctx: discord.ApplicationContext, user: discord.User, amount: int):
@@ -192,4 +192,18 @@ bot.add_cog(Economy(bot))
 async def on_ready():
     print(f"Bot zalogowany jako {bot.user}")
 
+# ---------------- MINIMAL FLASK SERVER ----------------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot działa!"
+
+def run():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run).start()
+
+# ---------------- RUN BOT ----------------
 bot.run(DISCORD_TOKEN)
