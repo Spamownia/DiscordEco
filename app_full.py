@@ -1,11 +1,10 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 import mysql.connector
 from mysql.connector import Error
 
 # ---------------- CONFIG ----------------
-DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.GxaESi.VCYsRIAatgCaTX3gWvC-UQ9Arfch2oCegGtMUs"
+DISCORD_TOKEN = "MTQ0Mjg4MDgzOTk3NjQ4OTAyMg.GrtGWQ.LmH_8G7JnvWyjcIuqJ_sgTZSvwOUw8WfG-I5Ak"
 
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
@@ -72,36 +71,39 @@ class Economy(commands.Cog):
         }
 
     # --------- PLAYER COMMANDS ---------
-    @app_commands.command(name="balance", description="Pokaż swoje saldo")
-    async def balance(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
+
+    @discord.slash_command(name="balance", description="Pokaż swoje saldo")
+    async def balance(self, ctx: discord.ApplicationContext):
+        user_id = ctx.author.id
         conn = get_connection()
         if conn:
             cursor = conn.cursor()
             cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (user_id,))
             row = cursor.fetchone()
             balance = row[0] if row else 0
-            await interaction.response.send_message(f"Twoje saldo: {balance}$")
+            await ctx.respond(f"Twoje saldo: {balance}$")
             cursor.close()
             conn.close()
         else:
-            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+            await ctx.respond("Błąd połączenia z bazą danych.")
 
-    @app_commands.command(name="shop", description="Pokaż dostępne przedmioty w sklepie")
-    async def shop(self, interaction: discord.Interaction):
+    @discord.slash_command(name="shop", description="Pokaż dostępne przedmioty w sklepie")
+    async def shop(self, ctx: discord.ApplicationContext):
         msg = "\n".join([f"{item}: {price}$" for item, price in self.shop_items.items()])
-        await interaction.response.send_message(f"**Sklep:**\n{msg}")
+        await ctx.respond(f"**Sklep:**\n{msg}")
 
-    @app_commands.command(name="buy", description="Kup przedmiot ze sklepu")
-    async def buy(self, interaction: discord.Interaction, item: str):
-        user_id = interaction.user.id
+    @discord.slash_command(name="buy", description="Kup przedmiot ze sklepu")
+    async def buy(self, ctx: discord.ApplicationContext, item: str):
+        user_id = ctx.author.id
         conn = get_connection()
         if not conn:
-            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+            await ctx.respond("Błąd połączenia z bazą danych.")
             return
+
         cursor = conn.cursor()
+
         if item not in self.shop_items:
-            await interaction.response.send_message("Nie ma takiego przedmiotu w sklepie.")
+            await ctx.respond("Nie ma takiego przedmiotu w sklepie.")
             cursor.close()
             conn.close()
             return
@@ -113,7 +115,7 @@ class Economy(commands.Cog):
         balance = row[0] if row else 0
 
         if balance < price:
-            await interaction.response.send_message("Nie masz wystarczająco środków.")
+            await ctx.respond("Nie masz wystarczająco środków.")
         else:
             new_balance = balance - price
             cursor.execute("""
@@ -128,16 +130,16 @@ class Economy(commands.Cog):
             """, (user_id, "BUY", item, price))
 
             conn.commit()
-            await interaction.response.send_message(f"Kupiłeś **{item}** za {price}$! Nowe saldo: {new_balance}$")
+            await ctx.respond(f"Kupiłeś **{item}** za {price}$! Nowe saldo: {new_balance}$")
+
         cursor.close()
         conn.close()
 
     # --------- ADMIN COMMANDS ---------
-    @app_commands.command(name="set_balance", description="Ustaw saldo użytkownika (ADMIN)")
-    async def set_balance(self, interaction: discord.Interaction, user: discord.User, amount: int):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Nie masz uprawnień admina!")
-            return
+
+    @discord.slash_command(name="set_balance", description="Ustaw saldo użytkownika (ADMIN)")
+    @commands.has_permissions(administrator=True)
+    async def set_balance(self, ctx: discord.ApplicationContext, user: discord.User, amount: int):
         conn = get_connection()
         if conn:
             cursor = conn.cursor()
@@ -153,17 +155,15 @@ class Economy(commands.Cog):
             """, (user.id, "SET_BALANCE", None, amount))
 
             conn.commit()
-            await interaction.response.send_message(f"Ustawiono saldo **{user.name}** na {amount}$")
+            await ctx.respond(f"Ustawiono saldo **{user.name}** na {amount}$")
             cursor.close()
             conn.close()
         else:
-            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+            await ctx.respond("Błąd połączenia z bazą danych.")
 
-    @app_commands.command(name="all_transactions", description="Pokaż ostatnie transakcje (ADMIN)")
-    async def all_transactions(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("Nie masz uprawnień admina!")
-            return
+    @discord.slash_command(name="all_transactions", description="Pokaż ostatnie transakcje (ADMIN)")
+    @commands.has_permissions(administrator=True)
+    async def all_transactions(self, ctx: discord.ApplicationContext):
         conn = get_connection()
         if conn:
             cursor = conn.cursor()
@@ -176,13 +176,13 @@ class Economy(commands.Cog):
             rows = cursor.fetchall()
             if rows:
                 msg = "\n".join([f"{r[0]}: {r[1]} {r[2] if r[2] else ''} {r[3]}$ ({r[4]})" for r in rows])
-                await interaction.response.send_message(f"**Ostatnie transakcje:**\n{msg}")
+                await ctx.respond(f"**Ostatnie transakcje:**\n{msg}")
             else:
-                await interaction.response.send_message("Brak transakcji.")
+                await ctx.respond("Brak transakcji.")
             cursor.close()
             conn.close()
         else:
-            await interaction.response.send_message("Błąd połączenia z bazą danych.")
+            await ctx.respond("Błąd połączenia z bazą danych.")
 
 # ---------------- START BOT ----------------
 bot.add_cog(Economy(bot))
@@ -190,10 +190,5 @@ bot.add_cog(Economy(bot))
 @bot.event
 async def on_ready():
     print(f"Bot zalogowany jako {bot.user}")
-    try:
-        await bot.tree.sync()
-        print("Komendy zarejestrowane!")
-    except Exception as e:
-        print(f"Błąd synchronizacji komend: {e}")
 
 bot.run(DISCORD_TOKEN)
