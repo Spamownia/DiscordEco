@@ -2,12 +2,10 @@ import discord
 from discord.ext import commands
 import mysql.connector
 from mysql.connector import Error
-from flask import Flask
-import threading
 import os
 
 # ---------------- CONFIG ----------------
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")  # Pobiera token z Environment Variable
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
 MYSQL_PORT = 14365
@@ -18,7 +16,7 @@ MYSQL_DB = "defaultdb"
 # ---------------- BOT SETUP ----------------
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(intents=intents)
 
 # ---------------- DATABASE ----------------
 def get_connection():
@@ -73,9 +71,8 @@ class Economy(commands.Cog):
             "Eliksir": 50
         }
 
-    # --------- PLAYER COMMANDS ---------
     @discord.slash_command(name="balance", description="Pokaż swoje saldo")
-    async def balance(self, ctx: discord.ApplicationContext):
+    async def balance(self, ctx):
         user_id = ctx.author.id
         conn = get_connection()
         if conn:
@@ -90,12 +87,12 @@ class Economy(commands.Cog):
             await ctx.respond("Błąd połączenia z bazą danych.")
 
     @discord.slash_command(name="shop", description="Pokaż dostępne przedmioty w sklepie")
-    async def shop(self, ctx: discord.ApplicationContext):
+    async def shop(self, ctx):
         msg = "\n".join([f"{item}: {price}$" for item, price in self.shop_items.items()])
         await ctx.respond(f"**Sklep:**\n{msg}")
 
     @discord.slash_command(name="buy", description="Kup przedmiot ze sklepu")
-    async def buy(self, ctx: discord.ApplicationContext, item: str):
+    async def buy(self, ctx, item: str):
         user_id = ctx.author.id
         conn = get_connection()
         if not conn:
@@ -111,7 +108,6 @@ class Economy(commands.Cog):
             return
 
         price = self.shop_items[item]
-
         cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (user_id,))
         row = cursor.fetchone()
         balance = row[0] if row else 0
@@ -137,10 +133,9 @@ class Economy(commands.Cog):
         cursor.close()
         conn.close()
 
-    # --------- ADMIN COMMANDS ---------
     @discord.slash_command(name="set_balance", description="Ustaw saldo użytkownika (ADMIN)")
     @commands.has_permissions(administrator=True)
-    async def set_balance(self, ctx: discord.ApplicationContext, user: discord.User, amount: int):
+    async def set_balance(self, ctx, user: discord.User, amount: int):
         conn = get_connection()
         if conn:
             cursor = conn.cursor()
@@ -164,7 +159,7 @@ class Economy(commands.Cog):
 
     @discord.slash_command(name="all_transactions", description="Pokaż ostatnie transakcje (ADMIN)")
     @commands.has_permissions(administrator=True)
-    async def all_transactions(self, ctx: discord.ApplicationContext):
+    async def all_transactions(self, ctx):
         conn = get_connection()
         if conn:
             cursor = conn.cursor()
@@ -185,25 +180,10 @@ class Economy(commands.Cog):
         else:
             await ctx.respond("Błąd połączenia z bazą danych.")
 
-# ---------------- START BOT ----------------
 bot.add_cog(Economy(bot))
 
 @bot.event
 async def on_ready():
     print(f"Bot zalogowany jako {bot.user}")
 
-# ---------------- MINIMAL FLASK SERVER ----------------
-app = Flask("")
-
-@app.route("/")
-def home():
-    return "Bot działa!"
-
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-threading.Thread(target=run).start()
-
-# ---------------- RUN BOT ----------------
 bot.run(DISCORD_TOKEN)
