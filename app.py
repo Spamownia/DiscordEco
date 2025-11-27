@@ -52,8 +52,10 @@ def get_log_list():
         with ftplib.FTP() as ftp:
             ftp.connect(FTP_HOST, FTP_PORT)
             ftp.login(FTP_USER, FTP_PASS)
+            ftp.set_pasv(True)  # tryb pasywny
             ftp.cwd(FTP_PATH)
             files = []
+            # Pobieranie listy plików przez LIST i parsowanie nazw
             ftp.retrlines('LIST', lambda line: files.append(line.split()[-1]))
             return files
     except Exception as e:
@@ -66,6 +68,7 @@ def read_log_file(filename):
         with ftplib.FTP() as ftp:
             ftp.connect(FTP_HOST, FTP_PORT)
             ftp.login(FTP_USER, FTP_PASS)
+            ftp.set_pasv(True)
             ftp.cwd(FTP_PATH)
             ftp.retrlines(f"RETR {filename}", lambda line: lines.append(line))
         return lines
@@ -99,7 +102,6 @@ def process_logs():
                 mark_line_processed(filename, line_hash)
 
 def handle_log_line(line):
-    # Przykład logu: "Player JohnDoe (SteamID: 76561198000000000) logged in"
     if "logged in" in line:
         try:
             nick = line.split("Player ")[1].split(" (SteamID")[0].strip()
