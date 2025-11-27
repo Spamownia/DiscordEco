@@ -18,7 +18,7 @@ FTP_PATH = "/SCUM/Saved/SaveFiles/Logs/"
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 if not DISCORD_TOKEN:
-    raise ValueError("Brak tokena Discorda w zmiennych środowisk.")
+    raise ValueError("Brak tokena Discorda w zmiennych środowiskowych!")
 
 CHECK_INTERVAL = 60  # sekundy
 
@@ -120,13 +120,28 @@ def handle_log_line(line):
         if "logged in" not in line and "logged out" not in line:
             return
 
-        # Format SCUM logowania:
-        # Player 'IP STEAMID:NICK(LEVEL)' logged in
-        fragment = line.split("'")[1]
-        parts = fragment.split(" ")
+        if "'" not in line:
+            print(f"[LOG] Pomijam nietypową linię: {line}")
+            return
 
-        # IP = parts[0]
-        steam_segment = parts[1]  # STEAMID:NICK(LEVEL)
+        try:
+            fragment = line.split("'")[1]
+        except:
+            print(f"[LOG] Nie mogę wyciągnąć fragmentu: {line}")
+            return
+
+        parts = fragment.split()
+        if len(parts) < 2:
+            print(f"[LOG] Format nieznany: {line}")
+            return
+
+        # Format:
+        # [IP] [STEAMID:NICK(LEVEL)]
+        steam_segment = parts[1]
+
+        if ":" not in steam_segment:
+            print(f"[LOG] Brak ':' w segmencie steam: {steam_segment}")
+            return
 
         steam_id = steam_segment.split(":")[0]
         nick = steam_segment.split(":")[1].split("(")[0].strip()
@@ -159,10 +174,10 @@ def process_logs():
     for filename in files:
         lines = read_log_file(filename)
         for line in lines:
-            h = hashlib.sha256(line.encode()).hexdigest()
-            if not line_already_processed(filename, h):
+            line_hash = hashlib.sha256(line.encode()).hexdigest()
+            if not line_already_processed(filename, line_hash):
                 handle_log_line(line)
-                mark_line_processed(filename, h)
+                mark_line_processed(filename, line_hash)
 
 # ---------------- WĄTEK ----------------
 def start_log_thread():
@@ -182,7 +197,7 @@ async def on_ready():
 
 @bot.command()
 async def saldo(ctx):
-    steam_id = str(ctx.author.id)  # → jeśli chcesz powiązać DC=steam, zmień to później
+    steam_id = str(ctx.author.id)
 
     cursor.execute("SELECT balance, nick FROM users WHERE steam_id=%s", (steam_id,))
     result = cursor.fetchone()
