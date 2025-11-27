@@ -16,7 +16,10 @@ FTP_USER = "gpftp37275281717442833"
 FTP_PASS = "LXNdGShY"
 FTP_PATH = "/SCUM/Saved/SaveFiles/Logs/"
 
-DISCORD_TOKEN = "TWÓJ_TOKEN_DISCORD"
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+if not DISCORD_TOKEN:
+    raise ValueError("Brak tokena Discorda w zmiennych środowiskowych!")
+
 CHECK_INTERVAL = 60  # sekund
 
 MYSQL_HOST = "mysql-1f2c991-spamownia91-479a.h.aivencloud.com"
