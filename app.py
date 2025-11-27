@@ -50,14 +50,15 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS processed_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,
     filename VARCHAR(255),
-    line_hash VARCHAR(255)
+    line_hash VARCHAR(255),
+    UNIQUE KEY unique_log (filename, line_hash)
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    steam_id VARCHAR(64),
+    steam_id VARCHAR(64) UNIQUE,
     nick VARCHAR(255),
     balance INT DEFAULT 0
 )
@@ -116,6 +117,7 @@ def mark_line_processed(filename, line_hash):
 
 # ---------------- PARSER ----------------
 def handle_log_line(line):
+    print(f"[DEBUG] Linia loga: {line.strip()}")
     try:
         if "logged in" not in line and "logged out" not in line:
             return
@@ -124,21 +126,13 @@ def handle_log_line(line):
             print(f"[LOG] Pomijam nietypową linię: {line}")
             return
 
-        try:
-            fragment = line.split("'")[1]
-        except:
-            print(f"[LOG] Nie mogę wyciągnąć fragmentu: {line}")
-            return
-
+        fragment = line.split("'")[1]
         parts = fragment.split()
         if len(parts) < 2:
             print(f"[LOG] Format nieznany: {line}")
             return
 
-        # Format:
-        # [IP] [STEAMID:NICK(LEVEL)]
         steam_segment = parts[1]
-
         if ":" not in steam_segment:
             print(f"[LOG] Brak ':' w segmencie steam: {steam_segment}")
             return
@@ -160,8 +154,9 @@ def handle_log_line(line):
                     (steam_id, nick)
                 )
             db.commit()
-
             print(f"[LOG] +10 monet → {nick} ({steam_id})")
+        else:
+            print(f"[LOG] Wylogowanie → {nick} ({steam_id})")
 
     except Exception as e:
         print(f"[LOG] Błąd parsowania: {e} | LINE: {line}")
