@@ -71,20 +71,25 @@ def read_log_file(filename):
             ftp.cwd(FTP_PATH)
             ftp.retrlines(f"RETR {filename}", lambda line: lines.append(line))
         return lines
+    except ftplib.error_perm as e:
+        print(f"[FTP] Brak dostępu lub plik {filename} nie istnieje: {e}")
     except Exception as e:
         print(f"[FTP] Błąd pobierania {filename}: {e}")
-        return []
+    return []
 
 def line_already_processed(filename, line_hash):
-    cursor.execute(
-        "SELECT id FROM processed_logs WHERE filename=%s AND line_hash=%s",
-        (filename, line_hash)
-    )
-    return cursor.fetchone() is not None
+    try:
+        cursor.execute(
+            "SELECT id FROM processed_logs WHERE filename=%s AND line_hash=%s",
+            (filename, line_hash)
+        )
+        return cursor.fetchone() is not None
+    except Exception as e:
+        print(f"[DB] Błąd sprawdzania przetworzonej linii: {e}")
+        return True  # na wypadek błędu nie przetwarzamy linii ponownie
 
 def mark_line_processed(filename, line_hash):
     try:
-        # INSERT IGNORE zamiast zwykłego INSERT
         cursor.execute(
             "INSERT IGNORE INTO processed_logs (filename, line_hash) VALUES (%s, %s)",
             (filename, line_hash)
@@ -95,28 +100,29 @@ def mark_line_processed(filename, line_hash):
 
 # ---------------- LOG PROCESSING ----------------
 def process_logs():
-    print("[FTP] Rozpoczynam skanowanie logów...")
-    files = get_log_list()
-    for filename in files:
-        lines = read_log_file(filename)
-        for line in lines:
-            line_hash = hashlib.sha256(line.encode()).hexdigest()
-            if not line_already_processed(filename, line_hash):
-                handle_log_line(line)
-                mark_line_processed(filename, line_hash)
+    try:
+        print("[FTP] Rozpoczynam skanowanie logów...")
+        files = get_log_list()
+        for filename in files:
+            lines = read_log_file(filename)
+            for line in lines:
+                line_hash = hashlib.sha256(line.encode()).hexdigest()
+                if not line_already_processed(filename, line_hash):
+                    handle_log_line(line)
+                    mark_line_processed(filename, line_hash)
+    except Exception as e:
+        print(f"[PROCESS] Błąd podczas przetwarzania logów: {e}")
 
 # ---------------- PARSER LOGÓW ----------------
 def handle_log_line(line):
     if "logged in" in line or "logged out" in line:
         try:
-            # Wyciągamy fragment między apostrofami
             player_info = line.split("'")[1]
             ip_and_steam = player_info.split(" ")
             steam_id, nick_with_level = ip_and_steam[1].split(":")
             nick = nick_with_level.split("(")[0].strip()
             status = "in" if "logged in" in line else "out"
 
-            # Przyznajemy monety tylko przy logowaniu
             if status == "in":
                 cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (steam_id,))
                 result = cursor.fetchone()
@@ -137,7 +143,10 @@ def handle_log_line(line):
 def start_log_thread():
     def run():
         while True:
-            process_logs()
+            try:
+                process_logs()
+            except Exception as e:
+                print(f"[THREAD] Błąd w wątku logów: {e}")
             time.sleep(CHECK_INTERVAL)
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -151,12 +160,16 @@ async def on_ready():
 @bot.command()
 async def saldo(ctx):
     discord_id = str(ctx.author.id)
-    cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (discord_id,))
-    result = cursor.fetchone()
-    if result:
-        await ctx.send(f"Masz {result[0]} monet.")
-    else:
-        await ctx.send("Nie znaleziono konta. Zaloguj się na serwer, aby otrzymać monety.")
+    try:
+        cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (discord_id,))
+        result = cursor.fetchone()
+        if result:
+            await ctx.send(f"Masz {result[0]} monet.")
+        else:
+            await ctx.send("Nie znaleziono konta. Zaloguj się na serwer, aby otrzymać monety.")
+    except Exception as e:
+        print(f"[DISCORD] Błąd przy komendzie saldo: {e}")
+        await ctx.send("Wystąpił błąd przy pobieraniu salda.")
 
 # ---------------- FLASK ----------------
 @app.route("/")
