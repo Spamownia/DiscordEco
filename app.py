@@ -6,7 +6,7 @@ import ftplib
 import hashlib
 import mysql.connector
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from flask import Flask
 
 # ---------------- CONFIG ----------------
@@ -35,10 +35,11 @@ app = Flask(__name__)
 
 # ---------------- DATABASE ----------------
 db = mysql.connector.connect(
-    host=DB_HOST,
-    user=DB_USER,
-    password=DB_PASS,
-    database=DB_NAME
+    host=MYSQL_HOST,
+    port=MYSQL_PORT,
+    user=MYSQL_USER,
+    password=MYSQL_PASSWORD,
+    database=MYSQL_DB
 )
 cursor = db.cursor()
 
@@ -145,5 +146,3 @@ def index():
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=10000), daemon=True).start()
     bot.run(DISCORD_TOKEN)
-
-bot.run(DISCORD_TOKEN)
