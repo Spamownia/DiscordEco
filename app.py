@@ -55,7 +55,6 @@ def get_log_list():
             ftp.set_pasv(True)  # tryb pasywny
             ftp.cwd(FTP_PATH)
             files = []
-            # Pobieranie listy plików przez LIST i parsowanie nazw
             ftp.retrlines('LIST', lambda line: files.append(line.split()[-1]))
             return files
     except Exception as e:
@@ -101,24 +100,35 @@ def process_logs():
                 handle_log_line(line)
                 mark_line_processed(filename, line_hash)
 
+# ---------------- PARSER LOGÓW ----------------
 def handle_log_line(line):
-    if "logged in" in line:
+    if "logged in" in line or "logged out" in line:
         try:
-            nick = line.split("Player ")[1].split(" (SteamID")[0].strip()
-            steam_id = line.split("SteamID: ")[1].split(")")[0].strip()
-            cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (steam_id,))
-            result = cursor.fetchone()
-            if result:
-                cursor.execute("UPDATE users SET balance=balance+10 WHERE discord_id=%s", (steam_id,))
-            else:
-                cursor.execute(
-                    "INSERT INTO users (discord_id, nick, balance) VALUES (%s, %s, %s)",
-                    (steam_id, nick, 10)
-                )
-            db.commit()
+            # Wyciągamy fragment między apostrofami
+            player_info = line.split("'")[1]
+            # player_info = "83.28.140.182 76561197992396189:Anu(26)"
+            steam_id, nick_with_level = player_info.split(" ")[1].split(":")
+            nick = nick_with_level.split("(")[0].strip()
+            status = "in" if "logged in" in line else "out"
+
+            # Przyznajemy monety tylko przy logowaniu
+            if status == "in":
+                cursor.execute("SELECT balance FROM users WHERE discord_id=%s", (steam_id,))
+                result = cursor.fetchone()
+                if result:
+                    cursor.execute("UPDATE users SET balance=balance+10 WHERE discord_id=%s", (steam_id,))
+                else:
+                    cursor.execute(
+                        "INSERT INTO users (discord_id, nick, balance) VALUES (%s, %s, %s)",
+                        (steam_id, nick, 10)
+                    )
+                db.commit()
+
+            print(f"[LOG] Gracz {nick} ({steam_id}) {status}.")
         except Exception as e:
             print(f"[LOG] Błąd przetwarzania linii: {e}")
 
+# ---------------- WĄTEK LOGÓW ----------------
 def start_log_thread():
     def run():
         while True:
@@ -148,6 +158,7 @@ async def saldo(ctx):
 def index():
     return "Bot online"
 
+# ---------------- URUCHOMIENIE ----------------
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host="0.0.0.0", port=10000), daemon=True).start()
     bot.run(DISCORD_TOKEN)
