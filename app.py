@@ -52,7 +52,7 @@ def get_log_list():
         with ftplib.FTP() as ftp:
             ftp.connect(FTP_HOST, FTP_PORT)
             ftp.login(FTP_USER, FTP_PASS)
-            ftp.set_pasv(True)  # tryb pasywny
+            ftp.set_pasv(True)
             ftp.cwd(FTP_PATH)
             files = []
             ftp.retrlines('LIST', lambda line: files.append(line.split()[-1]))
@@ -83,12 +83,17 @@ def line_already_processed(filename, line_hash):
     return cursor.fetchone() is not None
 
 def mark_line_processed(filename, line_hash):
-    cursor.execute(
-        "INSERT INTO processed_logs (filename, line_hash) VALUES (%s, %s)",
-        (filename, line_hash)
-    )
-    db.commit()
+    try:
+        # INSERT IGNORE zamiast zwykłego INSERT
+        cursor.execute(
+            "INSERT IGNORE INTO processed_logs (filename, line_hash) VALUES (%s, %s)",
+            (filename, line_hash)
+        )
+        db.commit()
+    except mysql.connector.Error as e:
+        print(f"[DB] Błąd przy oznaczaniu linii jako przetworzonej: {e}")
 
+# ---------------- LOG PROCESSING ----------------
 def process_logs():
     print("[FTP] Rozpoczynam skanowanie logów...")
     files = get_log_list()
@@ -106,8 +111,8 @@ def handle_log_line(line):
         try:
             # Wyciągamy fragment między apostrofami
             player_info = line.split("'")[1]
-            # player_info = "83.28.140.182 76561197992396189:Anu(26)"
-            steam_id, nick_with_level = player_info.split(" ")[1].split(":")
+            ip_and_steam = player_info.split(" ")
+            steam_id, nick_with_level = ip_and_steam[1].split(":")
             nick = nick_with_level.split("(")[0].strip()
             status = "in" if "logged in" in line else "out"
 
