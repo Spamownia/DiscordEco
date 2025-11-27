@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # app_full.py
 # Discord bot + FTP SCUM login monitor + MySQL economy
-# Powiązanie kont: /powiaz <steam_id>  (steam_id = liczba z logów SCUM)
-# Przy starcie: przetwarza wszystkie login_*.log i przyznaje monety tylko powiązanym kontom
-# Potem co 60s sprawdza nowe linie i dopisuje tylko nowe przetworzenia
+# Retroaktywne przyznawanie monet: po /powiaz bot rozpatrzy pending_logins i przyzna brakujące nagrody.
 
 import os
 import re
@@ -59,6 +57,7 @@ def get_connection():
             user=MYSQL_USER,
             password=MYSQL_PASSWORD,
             database=MYSQL_DB,
+            autocommit=False,
         )
     except Error as e:
         print("[DB] Błąd połączenia:", e)
@@ -72,45 +71,48 @@ def init_db():
 
     cursor = conn.cursor()
     # users: discord_id PK, steam_id UNIQUE (może być NULL), balance
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                discord_id BIGINT PRIMARY KEY,
-                steam_id BIGINT UNIQUE,
-                balance INT NOT NULL DEFAULT 0
-            )
-        """)
-    except Exception as e:
-        print("[DB] Błąd tworzenia tabeli users:", e)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            discord_id BIGINT PRIMARY KEY,
+            steam_id BIGINT UNIQUE,
+            balance INT NOT NULL DEFAULT 0
+        )
+    """)
 
     # transactions: zapis akcji
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                discord_id BIGINT,
-                steam_id BIGINT,
-                action VARCHAR(50),
-                item VARCHAR(100),
-                amount INT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-    except Exception as e:
-        print("[DB] Błąd tworzenia transactions:", e)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            discord_id BIGINT,
+            steam_id BIGINT,
+            action VARCHAR(50),
+            item VARCHAR(100),
+            amount INT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     # processed_log_lines: aby nie dublować przy restarcie (hash linii)
-    try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS processed_log_lines (
-                line_hash VARCHAR(64) PRIMARY KEY,
-                source_file VARCHAR(255),
-                line_text TEXT,
-                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-    except Exception as e:
-        print("[DB] Błąd tworzenia processed_log_lines:", e)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_log_lines (
+            line_hash VARCHAR(64) PRIMARY KEY,
+            source_file VARCHAR(255),
+            line_text TEXT,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # pending_logins: niepowiązane linie czekające na powiązanie (retroactive processing)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_logins (
+            line_hash VARCHAR(64) PRIMARY KEY,
+            source_file VARCHAR(255),
+            steam_id VARCHAR(32),
+            nick VARCHAR(100),
+            line_text TEXT,
+            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
     conn.commit()
     cursor.close()
@@ -149,6 +151,7 @@ def add_coins_for_discord(discord_id, steam_id, amount, reason="LOGIN"):
         return True
     except Exception as e:
         print("[ECON] Błąd add_coins_for_discord:", e)
+        conn.rollback()
         return False
     finally:
         cursor.close()
@@ -182,6 +185,7 @@ def record_processed_line(line_hash, source_file, line_text):
         conn.commit()
     except Exception as e:
         print("[DB] Błąd record_processed_line:", e)
+        conn.rollback()
     finally:
         cursor.close()
         conn.close()
@@ -198,6 +202,55 @@ def is_line_already_processed(line_hash):
     except Exception as e:
         print("[DB] Błąd is_line_already_processed:", e)
         return False
+    finally:
+        cursor.close()
+        conn.close()
+
+def add_pending_login(line_hash, source_file, steam_id, nick, line_text):
+    """Dodaje linię do pending_logins (jeśli jeszcze nie ma)."""
+    conn = get_connection()
+    if not conn:
+        return
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT IGNORE INTO pending_logins(line_hash, source_file, steam_id, nick, line_text) VALUES(%s,%s,%s,%s,%s)",
+                       (line_hash, source_file, steam_id, nick, line_text))
+        conn.commit()
+    except Exception as e:
+        print("[DB] Błąd add_pending_login:", e)
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_pending_by_steam(steam_id):
+    """Zwraca listę (line_hash, source_file, nick, line_text) dla danego steam_id."""
+    conn = get_connection()
+    if not conn:
+        return []
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT line_hash, source_file, nick, line_text FROM pending_logins WHERE steam_id=%s", (steam_id,))
+        rows = cursor.fetchall()
+        return rows
+    except Exception as e:
+        print("[DB] Błąd get_pending_by_steam:", e)
+        return []
+    finally:
+        cursor.close()
+        conn.close()
+
+def delete_pending(line_hash):
+    conn = get_connection()
+    if not conn:
+        return
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM pending_logins WHERE line_hash=%s", (line_hash,))
+        conn.commit()
+    except Exception as e:
+        print("[DB] Błąd delete_pending:", e)
+        conn.rollback()
     finally:
         cursor.close()
         conn.close()
@@ -253,8 +306,8 @@ def process_all_login_logs_once():
     """
     Przetwarza wszystkie pliki login_*.log na FTP.
     Dla każdej linii: jeśli pasuje regex i linia nie jest przetworzona (hash),
-    to jeśli steam_id jest powiązany z discord_id -> przyznaj monety.
-    Następnie oznacz linię jako przetworzoną (żeby nie dublować).
+    to jeśli steam_id jest powiązany z discord_id -> przyznaj monety i przenieś do processed_log_lines.
+    Jeśli steam_id nie jest powiązany -> wrzuć do pending_logins (do retroactive processing).
     """
     print("[FTP] Rozpoczynam pełne skanowanie login_*.log ...", datetime.utcnow().isoformat())
     files = ftp_list_login_files()
@@ -277,20 +330,19 @@ def process_all_login_logs_once():
                 # już obrobione
                 continue
 
+            # sprawdzamy czy istnieje powiązanie steam->discord
             discord_id = get_discord_by_steam(steam_id)
             if discord_id:
-                # przyznaj monety
+                # przyznaj monety i oznacz linię jako processed
                 added = add_coins_for_discord(discord_id, steam_id, COINS_PER_LOGIN, reason="LOGIN")
                 if added:
                     record_processed_line(h, fname, line)
                 else:
                     print(f"[FTP] Nie udało się dodać monet dla SteamID={steam_id}")
             else:
-                # nie powiązane konto - oznaczamy linię jako przetworzoną,
-                # żeby przy restarcie nie przerabiać non-stop tej samej linii.
-                # Robimy też wpis do transactions jako notatkę (opcjonalnie)
-                print(f"[FTP] SteamID={steam_id} (nick={nick}) NIE jest powiązany z Discordem - oznaczam jako przetworzone.")
-                record_processed_line(h, fname, line)
+                # Nie ma powiązania — wrzucamy do pending (nie oznaczamy jako processed)
+                add_pending_login(h, fname, steam_id, nick, line)
+                print(f"[FTP] Dodano do pending: SteamID={steam_id}, nick={nick}, hash={h}")
 
 # ----------------------------- BACKGROUND MONITOR (nowe linie) -----------------------------
 
@@ -322,7 +374,8 @@ class EconomyCog(commands.Cog):
 
     @discord.slash_command(name="powiaz", description="Powiąż swoje konto Discord ze SteamID (np. 765611979xxxxxxxx)")
     async def powiaz(self, ctx, steam_id: str):
-        """Powiąż konto - zapisuje steam_id w users dla wywołującego użytkownika."""
+        """Powiąż konto - zapisuje steam_id w users dla wywołującego użytkownika.
+           Po powiązaniu bot sprawdzi pending_logins i przyzna retroaktywnie monety."""
         # walidacja steam_id
         if not re.fullmatch(r"\d{15,20}", steam_id):
             await ctx.respond("Błędny SteamID. Podaj pełne SteamID (liczby).")
@@ -353,10 +406,39 @@ class EconomyCog(commands.Cog):
             print(f"[BIND] Discord {discord_id} powiązał SteamID {steam_id}")
         except Exception as e:
             print("[BIND] Błąd podczas powiązywania:", e)
+            conn.rollback()
             await ctx.respond("Wystąpił błąd podczas powiązywania. Sprawdź logi.")
-        finally:
             cursor.close()
             conn.close()
+            return
+
+        cursor.close()
+        conn.close()
+
+        # Po powiązaniu — retroaktywne przetworzenie pending_logins dla tego steam_id
+        pending = get_pending_by_steam(steam_id)
+        if not pending:
+            await ctx.respond("Brak wcześniejszych logowań do rozliczenia (brak pending).")
+            return
+
+        awarded = 0
+        for line_hash, source_file, nick, line_text in pending:
+            # Upewnij się czy nie było już processed (dodatkowa ochrona)
+            if is_line_already_processed(line_hash):
+                delete_pending(line_hash)
+                continue
+
+            # Dodaj monety
+            success = add_coins_for_discord(discord_id, steam_id, COINS_PER_LOGIN, reason="LOGIN_REWARD_RETR0")
+            if success:
+                # przenieś do processed i usuń z pending
+                record_processed_line(line_hash, source_file, line_text)
+                delete_pending(line_hash)
+                awarded += 1
+            else:
+                print(f"[BIND] Nie udało się przyznać monet retro dla {steam_id} (hash {line_hash})")
+
+        await ctx.respond(f"Przyznano retroaktywnie {awarded * COINS_PER_LOGIN} monet (z {awarded} logowań).")
 
     @discord.slash_command(name="saldo", description="Pokaż swoje saldo lub saldo kogoś po SteamID")
     async def saldo(self, ctx, steam_id: str = None):
@@ -432,7 +514,6 @@ class EconomyCog(commands.Cog):
 
     @discord.slash_command(name="buy", description="Kup przedmiot ze sklepu")
     async def buy(self, ctx, item: str):
-        # prosty sklep w kodzie - rozbudujemy gdy zechcesz
         shop_items = {
             "Miecz": 100,
             "Tarcza": 75,
@@ -464,6 +545,7 @@ class EconomyCog(commands.Cog):
             await ctx.respond(f"Kupiłeś **{item_title}** za {price} monet. Nowe saldo: {new_balance}")
         except Exception as e:
             print("[CMD buy] Błąd:", e)
+            conn.rollback()
             await ctx.respond("Wystąpił błąd podczas zakupu.")
         finally:
             cursor.close()
